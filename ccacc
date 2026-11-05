@@ -1335,12 +1335,18 @@ record_weekly_reset() {
     fi
 }
 
-# Print profile <name>'s next weekly reset in the session's TZ, carried forward
-# a week at a time from the recorded one; nothing when none was recorded.
+# Run a command in this computer's own timezone (/etc/localtime). A session
+# exports TZ as its account's zone, which must not shift the times shown.
+in_system_timezone() {
+    env -u TZ "$@"
+}
+
+# Print profile <name>'s next weekly reset in this computer's timezone, carried
+# forward a week at a time from the recorded one; nothing when none was recorded.
 weekly_reset_label() {
     local file="$ACCOUNTS_DIR/$1.weekly"
     [ -f "$file" ] && [ ! -L "$file" ] || return 0
-    jq -Rr 'select(test("^[0-9]{9,11}\\n?\\z")) | rtrimstr("\n") | tonumber
+    in_system_timezone jq -Rr 'select(test("^[0-9]{9,11}\\n?\\z")) | rtrimstr("\n") | tonumber
         | . + ((now - .) / 604800 | if . > 0 then ceil else 0 end) * 604800
         | strflocaltime("%a %d %b %H:%M")' "$file" 2>/dev/null || :
 }

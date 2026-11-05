@@ -50,6 +50,8 @@ class WeeklyResetTests(unittest.TestCase):
         if credentials is None:
             credentials = self.login()
         mocks = "read_credentials() { printf '%s' " + repr(json.dumps(credentials)) + "; }\n"
+        # Labels use the computer's timezone; pin it to UTC so expectations hold anywhere.
+        mocks += 'in_system_timezone() { TZ=UTC "$@"; }\n'
         result = subprocess.run(["/bin/bash", "-c", SOURCE + mocks + body],
                                 env=self.env, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -89,6 +91,16 @@ class WeeklyResetTests(unittest.TestCase):
         self.assertEqual(label, time.strftime("%a %d %b %H:%M", time.gmtime(expected)))
         self.record("tokyo", f"{RESET}\n")
         self.assertEqual(self.bash('weekly_reset_label tokyo'), "Thu 03 Jan 11:00\n")
+
+    def test_label_ignores_the_session_timezone(self):
+        self.record("tokyo", f"{RESET}\n")
+        env = dict(self.env, TZ="Australia/Sydney")
+        result = subprocess.run(["/bin/bash", "-c", SOURCE + 'weekly_reset_label tokyo'],
+                                env=env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        system = subprocess.run(["env", "-u", "TZ", "date", "-r", str(RESET), "+%a %d %b %H:%M"],
+                                text=True, capture_output=True, check=True).stdout
+        self.assertEqual(result.stdout, system)
 
     def test_missing_or_invalid_record_shows_nothing(self):
         (self.accounts / "tokyo.json").write_text(json.dumps({"oauthAccount": {"emailAddress": "t@example.com"}}))

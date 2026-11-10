@@ -82,6 +82,7 @@ ccacc list                                  # List profiles; ls is an alias
 ccacc current                               # Show current email, saved name and weekly reset
 ccacc timezone                              # Read the current session timezone
 ccacc timezone work                         # Read a saved profile's timezone
+ccacc rename work office                    # Rename a profile; login, history and YOLO choice follow
 ccacc rm work                               # Confirm deletion of that profile and stash
 ccacc usage daily                           # ccusage over the current and all saved accounts
 ccacc help

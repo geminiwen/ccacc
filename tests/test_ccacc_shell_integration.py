@@ -358,7 +358,8 @@ apply_surge() { :; }
         self.executable("uname", '#!/bin/bash\n[ "$1" = -s ] || exit 86\nprintf "Linux\\n"\n')
         before = self.home_snapshot()
         for command in (("list",), ("current",), ("use", "tokyo", "--no-yolo"), ("save", "fresh"),
-                        ("new",), ("rm", "tokyo"), ("configure-shell",), ("timezone",)):
+                        ("new",), ("rm", "tokyo"), ("rename", "tokyo", "osaka"), ("configure-shell",),
+                        ("timezone",)):
             with self.subTest(command=command):
                 result = self.cli(*command, success=False)
                 self.assertIn("ccacc supports macOS only (uname -s reported 'Linux')", result.stderr)

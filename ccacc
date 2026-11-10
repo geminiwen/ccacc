@@ -141,6 +141,7 @@ Commands:
   save <name>           Save the current account
   use [name] [-v]       Switch to a saved account (-v lists every backed-up path)
   new                   Log out to a clean session
+  rename <old> <new>    Rename a saved account
   rm <name>             Delete a saved account${surge_line}
   timezone [name]       Print the session's or an account's timezone${usage_line}
   update [--force]      Install the latest ccacc release over this one
@@ -2529,6 +2530,86 @@ delete_command() (
     ok "Deleted ${name}"
 )
 
+# Function to rename a saved account. Only the files named after the account move:
+# the login and live session stay as they are, so Claude Code may keep running.
+rename_command() (
+    local old="${1:-}" new="${2:-}" active suffix path index staged_mode='' staged_active='' failed=''
+    local -a sources targets moved_from moved_to
+    umask 077
+    if [ "$#" -ne 2 ]; then
+        echo "Error: Usage: $SCRIPT_NAME rename <old> <new>" >&2
+        return 1
+    fi
+    check_name "$old" || return 1
+    check_name "$new" || return 1
+    check_ready || return 1
+    load_shell_companion || return 1
+    cleanup_is_complete || return 1
+    if [ ! -f "$ACCOUNTS_DIR/${old}.json" ]; then
+        echo -e "${RED}Error: Account '${old}' not found${NC}"
+        return 1
+    fi
+    if [ "$old" = "$new" ]; then
+        echo "Error: '$old' already has that name" >&2
+        return 1
+    fi
+    if profile_exists "$new"; then
+        echo "Error: Account '$new' already exists; choose another name, or run '$SCRIPT_NAME rm $new' first" >&2
+        return 1
+    fi
+    for suffix in .json .credentials .credentials.enc .surge .weekly; do
+        sources+=("file|$ACCOUNTS_DIR/$old$suffix"); targets+=("file|$ACCOUNTS_DIR/$new$suffix")
+    done
+    sources+=("file|$ALIASES_DIR/$old.json" "file|$TIMEZONES_DIR/$old" "dir|$ACCOUNTS_DIR/$old")
+    targets+=("file|$ALIASES_DIR/$new.json" "file|$TIMEZONES_DIR/$new" "dir|$ACCOUNTS_DIR/$new")
+    # Check every path before the first move, so an unsafe one changes nothing.
+    for path in "${sources[@]}" "${targets[@]}" "file|$LAUNCH_MODE_FILE" "file|$ACTIVE_FILE"; do
+        if ! _ccacc_shell_path "${path#*|}" "${path%%|*}" || ! cleanup_file_is_writable "${path#*|}"; then
+            echo "Error: Unsafe or unwritable profile path; account unchanged: ${path#*|}" >&2
+            return 1
+        fi
+    done
+    for path in "${targets[@]}"; do
+        if [ -e "${path#*|}" ] || [ -L "${path#*|}" ]; then
+            echo "Error: '${path#*|}' is in the way; account unchanged" >&2
+            return 1
+        fi
+    done
+    trap '[ -z "$staged_mode" ] || rm -f "$staged_mode"; [ -z "$staged_active" ] || rm -f "$staged_active"' EXIT
+    trap 'exit 130' INT
+    # The YOLO choice belongs to this account, so it follows the new name.
+    if [ -f "$LAUNCH_MODE_FILE" ] && jq -se --arg account "$old" 'length == 1 and (.[0] |
+        keys == ["account", "version", "yolo"] and .version == 1 and .account == $account and
+        (.yolo | type == "boolean"))' "$LAUNCH_MODE_FILE" >/dev/null 2>&1; then
+        staged_mode=$(mktemp "$ACCOUNTS_DIR/.launch-mode.XXXXXXXX") || return 1
+        jq -c --arg account "$new" '.account = $account' "$LAUNCH_MODE_FILE" > "$staged_mode" || return 1
+    fi
+    active=$(active_account)
+    if [ "$active" = "$old" ]; then
+        staged_active=$(mktemp "$ACCOUNTS_DIR/.active.XXXXXXXX") || return 1
+        printf '%s\n' "$new" > "$staged_active" || return 1
+    fi
+    for ((index=0; index<${#sources[@]}; index++)); do
+        path=${sources[index]#*|}
+        [ -e "$path" ] || continue
+        if ! mv "$path" "${targets[index]#*|}"; then failed=yes; break; fi
+        moved_from+=("$path"); moved_to+=("${targets[index]#*|}")
+    done
+    # The markers go last. A failure after the launch mode moved leaves it naming
+    # an account that is not active, which means normal permissions.
+    if [ -z "$failed" ] && [ -n "$staged_mode" ]; then mv -f "$staged_mode" "$LAUNCH_MODE_FILE" || failed=yes; fi
+    if [ -z "$failed" ] && [ -n "$staged_active" ]; then mv -f "$staged_active" "$ACTIVE_FILE" || failed=yes; fi
+    if [ -n "$failed" ]; then
+        for ((index=${#moved_from[@]}-1; index>=0; index--)); do
+            mv "${moved_to[index]}" "${moved_from[index]}" \
+                || echo "Error: Could not move ${moved_to[index]} back to ${moved_from[index]}" >&2
+        done
+        echo "Error: Rename failed; '$old' keeps its name" >&2
+        return 1
+    fi
+    ok "Renamed ${old} to ${new}"
+)
+
 # ccacc relies on the macOS keychain (/usr/bin/security); refuse anything else.
 require_macos() {
     local platform
@@ -2596,6 +2677,10 @@ main() {
         usage)
             shift
             usage_command "$@"
+            ;;
+        rename)
+            shift
+            rename_command "$@"
             ;;
         rm)
             delete_command "$2"

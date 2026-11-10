@@ -119,7 +119,7 @@ new_identity() { printf '{"userID":"new-fixture-id","anonymousId":"new-anonymous
 
     def snapshot(self):
         return {p.relative_to(self.home): (p.read_bytes(), p.stat().st_mtime_ns, p.stat().st_ino)
-                for p in self.home.rglob("*") if p.is_file()}
+                for p in integration.home_files(self.home)}
 
     def hook_snapshot(self):
         paths = list(self.rcs) + list((self.home / ".ccacc-shell").iterdir())

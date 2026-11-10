@@ -21,6 +21,7 @@ SOURCE = (ROOT / "ccacc").read_text().rsplit('main "$@"', 1)[0]
 
 class AliasTimezoneTests(unittest.TestCase):
     def setUp(self):
+        (ROOT / ".orca").mkdir(exist_ok=True)
         self.temp = tempfile.TemporaryDirectory(dir=ROOT / ".orca", prefix="alias-timezone-")
         self.addCleanup(self.temp.cleanup)
         self.fixture = Path(self.temp.name)

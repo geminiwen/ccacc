@@ -19,6 +19,17 @@ ROOT = Path(__file__).resolve().parents[1]
 JQ = shutil.which("jq")
 
 
+def home_files(home):
+    """Files under a fixture HOME for snapshots, without the shell's own history.
+
+    An interactive fixture bash saves its history to $HOME/.bash_history on exit
+    whenever HISTFILE is not exported to elsewhere; that file is written by bash,
+    not ccacc, so only that one name at the HOME root is left out.
+    """
+    return [path for path in home.rglob("*")
+            if path.is_file() and path.relative_to(home) != Path(".bash_history")]
+
+
 class ShellIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.reset_fixture()
@@ -285,14 +296,14 @@ apply_surge() { :; }
                 aliases.mkdir()
                 (aliases / "sydney.json").write_text(json.dumps({"env": {"TZ": "Asia/Tokyo"}}))
                 before = {path.relative_to(self.home): path.read_bytes()
-                          for path in self.home.rglob("*") if path.is_file()}
+                          for path in home_files(self.home)}
                 hook = shlex.quote(str(self.home / ".ccacc-shell/hook.sh"))
                 result = self.interactive(shell, f". {hook}\nclaude\nexit 0\n", startup=False)
                 self.assertIn("cannot read the active account timezone", result.stderr)
                 self.assertNotIn("Choose timezone", result.stderr)
                 self.assertFalse(self.launches.exists())
                 self.assertEqual(before, {path.relative_to(self.home): path.read_bytes()
-                                          for path in self.home.rglob("*") if path.is_file()})
+                                          for path in home_files(self.home)})
 
     def test_installed_operations_are_read_only_even_with_readonly_startup(self):
         for shell in ("bash", "zsh"):

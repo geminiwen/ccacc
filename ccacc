@@ -1599,6 +1599,22 @@ valid_saved_account() {
             "$ACCOUNTS_DIR/$1.json" >/dev/null 2>&1
 }
 
+# Read one terminal line into the caller's $answer for a y/N prompt; nonzero
+# on EOF or without a terminal. Bash 3.2 runs a trapped Ctrl-C at once only
+# while read is already waiting: one that lands between the prompt and that
+# point stays pending, and a plain read would wait for a whole line before the
+# trap runs. Polling lets a pending trap run within a second. On timeout Bash
+# 3.2 returns 1 as on EOF, but leaves $answer untouched; a line read with
+# IFS= -r never contains a newline, so the newline marks a timeout.
+read_tty_answer() {
+    answer=''
+    while :; do
+        answer=$'\n'
+        IFS= read -r -t 1 answer <&4 && return 0
+        [ "$answer" = $'\n' ] || return 1
+    done 2>/dev/null 4< /dev/tty
+}
+
 # Read-only terminal UI. stdout is exclusively the chosen safe name, so command
 # substitution and redirected caller stdout both work. Keep ISIG enabled for
 # Ctrl-C and restore the exact terminal state on every exit (including signals).
@@ -1848,7 +1864,7 @@ use_command() (
         printf "This session is not logged in, but Claude Code left files behind: %s. Discard them and switch to '%s'? (y/N) " \
             "$leftovers" "$name" >&2
         answer=''
-        { IFS= read -r answer < /dev/tty; } 2>/dev/null || answer=''
+        read_tty_answer || answer=''
         case "$answer" in
             y|Y|[yY][eE][sS]) discard=yes ;;
             *) echo "Cancelled; nothing changed." >&2; return 1 ;;
@@ -1868,7 +1884,7 @@ use_command() (
         echo "YOLO enabled by alwaysYOLO in $SETTINGS_FILE (use --no-yolo to override)" >&2
     elif [ -z "$mode_option" ] && [ -t 0 ] && [ -t 2 ]; then
         printf 'YOLO? (y/N) ' >&2
-        if { IFS= read -r answer < /dev/tty; } 2>/dev/null; then
+        if read_tty_answer; then
             case "$answer" in y|Y|[yY][eE][sS]) mode=true ;; esac
         fi
     fi

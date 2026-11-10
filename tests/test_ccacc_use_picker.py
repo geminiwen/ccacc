@@ -304,7 +304,7 @@ class ProfilePickerTests(unittest.TestCase):
                 self.assertIn("> tokyo | saved-tokyo@example.test", plain(menu))
                 self.assertNotIn("Confirm outgoing backup", menu)
                 self.assertLess(menu.index(LEAVE), menu.index("YOLO?"))
-                self.assertLess(menu.index("YOLO?"), menu.index("Backed up outgoing"))
+                self.assertLess(menu.index("YOLO?"), menu.index("Backed up "))
                 self.case.assert_report(menu)
                 self.case.assert_switched()
                 self.case.run_body("main use sydney --no-yolo")
@@ -324,7 +324,7 @@ class ProfilePickerTests(unittest.TestCase):
         before = self.case.snapshot()
         status, menu, _ = self.run_pty(keys=b"j\r", yolo=b"\x03")
         self.assertEqual(status, 130, menu)
-        self.assertNotIn("Backed up outgoing", menu)
+        self.assertNotIn("Backed up ", menu)
         self.assertEqual(self.case.snapshot(), before)
         self.assertEqual(self.case.operations(), [])
 

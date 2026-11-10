@@ -19,7 +19,7 @@ CCACC = ROOT / "ccacc"
 SOURCE = CCACC.read_text().rsplit('main "$@"', 1)[0]
 LATEST_URL = "https://api.github.com/repos/geminiwen/ccacc/releases/latest"
 INSTALLER_URL = "https://raw.githubusercontent.com/geminiwen/ccacc/main/install.sh"
-HINT = "ccacc 1.2.0 is available (you have 1.1.2); run 'ccacc update'\n"
+HINT = "ccacc 1.8.0 is available (you have 1.2.1); run 'ccacc update'\n"
 
 # Any other URL fails, so a fixture can never reach a real host.
 CURL = r'''#!/bin/bash
@@ -81,7 +81,7 @@ class UpdateTests(unittest.TestCase):
         self.cache = self.home / ".ccacc/update-check.json"
         self.env = dict(os.environ, HOME=str(self.home), TZ="UTC", TMPDIR=str(self.fixture),
                         PATH=str(self.bin) + ":" + os.environ["PATH"], CALLS=str(self.calls),
-                        RELEASE_RESPONSE=json.dumps({"tag_name": "v1.2.0"}),
+                        RELEASE_RESPONSE=json.dumps({"tag_name": "v1.8.0"}),
                         FAKE_INSTALLER=str(self.installer), INSTALLER_LOG=str(self.installer_log),
                         INSTALLER_ENV=str(self.installer_env))
         for name in ("CCACC_NO_UPDATE_CHECK", "CCACC_INSTALL_REF", "CCACC_INSTALL_REPO", "CLAUDE_CONFIG_DIR",
@@ -148,7 +148,7 @@ class UpdateTests(unittest.TestCase):
     # Hint from the cache
 
     def test_hint_printed_once_to_stderr_for_newer_release(self):
-        self.write_cache("1.2.0")
+        self.write_cache("1.8.0")
         result = self.bash("show_update_hint")
         self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", HINT))
 
@@ -168,7 +168,7 @@ class UpdateTests(unittest.TestCase):
 
     def test_linked_cache_is_ignored(self):
         target = self.fixture / "elsewhere.json"
-        target.write_text(json.dumps({"checked_at": int(time.time()), "latest": "1.2.0"}))
+        target.write_text(json.dumps({"checked_at": int(time.time()), "latest": "1.8.0"}))
         self.cache.parent.mkdir(mode=0o700)
         self.cache.symlink_to(target)
         self.assertEqual(self.bash("show_update_hint").stderr, "")
@@ -178,7 +178,7 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(self.run_ccacc("list").stderr, "")
         self.assert_no_refresh()
         self.assertTrue(self.cache.is_symlink())
-        self.assertEqual(json.loads(target.read_text())["latest"], "1.2.0")
+        self.assertEqual(json.loads(target.read_text())["latest"], "1.8.0")
 
     # list/current/use: background refresh and hint
 
@@ -186,7 +186,7 @@ class UpdateTests(unittest.TestCase):
         result = self.run_ccacc("list")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stderr, "")  # nothing cached yet
-        self.wait_for_cache("1.2.0")
+        self.wait_for_cache("1.8.0")
         self.assertEqual(self.urls(), [LATEST_URL])
         argv = self.calls.read_bytes().decode().split("\0")
         for flag in ("--disable", "--fail", "--proto", "--proto-redir"):
@@ -209,43 +209,43 @@ class UpdateTests(unittest.TestCase):
         result = self.run_ccacc("list")
         self.assertLess(time.time() - started, 3, "list waited for the update check")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.wait_for_cache("1.2.0")
+        self.wait_for_cache("1.8.0")
 
     def test_refresh_skipped_when_cache_is_fresh(self):
-        self.write_cache("1.1.2", age=23 * 3600)
+        self.write_cache("1.2.1", age=23 * 3600)
         result = self.run_ccacc("current")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stderr, "")
         self.assert_no_refresh()
-        self.assertEqual(self.read_cache()["latest"], "1.1.2")
+        self.assertEqual(self.read_cache()["latest"], "1.2.1")
 
     def test_stale_or_future_cache_is_refreshed_and_hint_uses_cached_value(self):
         for age in (25 * 3600, -3 * 86400):
             with self.subTest(age=age):
                 self.calls.unlink(missing_ok=True)
-                self.write_cache("1.2.0", age=age)
-                self.env["RELEASE_RESPONSE"] = json.dumps({"tag_name": "v1.3.0"})
+                self.write_cache("1.8.0", age=age)
+                self.env["RELEASE_RESPONSE"] = json.dumps({"tag_name": "v1.9.0"})
                 result = self.run_ccacc("current")
                 self.assertEqual(result.returncode, 0, result.stderr)
                 # The hint reads only the cache as it stood; it never waits for the refresh.
                 self.assertEqual(result.stderr, HINT)
-                self.wait_for_cache("1.3.0")
+                self.wait_for_cache("1.9.0")
                 self.assertEqual(self.urls(), [LATEST_URL])
 
     def test_network_failure_is_silent_and_retried_only_after_a_day(self):
-        self.write_cache("1.2.0", age=2 * 86400)
+        self.write_cache("1.8.0", age=2 * 86400)
         self.env["RELEASE_FAIL"] = "yes"
         result = self.run_ccacc("list")
         self.assertEqual(result.stderr, HINT)
         self.wait_for(lambda: self.urls() and time.time() - self.read_cache()["checked_at"] < 60)
         time.sleep(0.5)
-        self.assertEqual(self.read_cache()["latest"], "1.2.0")  # last known version kept
+        self.assertEqual(self.read_cache()["latest"], "1.8.0")  # last known version kept
         self.calls.unlink()
         self.assertEqual(self.run_ccacc("list").stderr, HINT)
         self.assert_no_refresh()
 
     def test_garbage_release_response_is_not_cached(self):
-        for response in ('{"tag_name":"v1.2.0\\u001b[31m"}', '{"tag_name":"1.2.0"}', "not json", "[]"):
+        for response in ('{"tag_name":"v1.8.0\\u001b[31m"}', '{"tag_name":"1.8.0"}', "not json", "[]"):
             with self.subTest(response=response):
                 self.calls.unlink(missing_ok=True)
                 self.cache.unlink(missing_ok=True)
@@ -258,7 +258,7 @@ class UpdateTests(unittest.TestCase):
 
     def test_opt_out_disables_refresh_and_hint(self):
         self.env["CCACC_NO_UPDATE_CHECK"] = "1"
-        self.write_cache("1.2.0", age=2 * 86400)
+        self.write_cache("1.8.0", age=2 * 86400)
         before = self.cache.read_text()
         for command in ("list", "ls", "current"):
             with self.subTest(command=command):
@@ -276,7 +276,7 @@ class UpdateTests(unittest.TestCase):
         self.assertFalse((self.home / ".ccacc").exists())
 
     def test_other_commands_neither_refresh_nor_hint(self):
-        self.write_cache("1.2.0", age=2 * 86400)
+        self.write_cache("1.8.0", age=2 * 86400)
         for args in (("timezone",), ("launch-mode",), ("help",), ("-v",), ("--version",), ()):
             with self.subTest(args=args):
                 result = self.run_ccacc(*args)
@@ -284,7 +284,7 @@ class UpdateTests(unittest.TestCase):
         self.assert_no_refresh()
 
     def test_use_hint_follows_success_only(self):
-        self.write_cache("1.2.0")
+        self.write_cache("1.8.0")
         # The picker and switch write to stderr; the hint must come after them.
         result = self.bash('use_command() { echo "picker and switch" >&2; }\nmain use')
         self.assertEqual((result.returncode, result.stderr), (0, "picker and switch\n" + HINT))
@@ -294,7 +294,7 @@ class UpdateTests(unittest.TestCase):
 
     def test_failure_status_survives_a_condition(self):
         # Inside a condition set -e is off; the hint must not turn a failure into success.
-        self.write_cache("1.2.0")
+        self.write_cache("1.8.0")
         for command, mock in (("use", "use_command"), ("list", "list_accounts"), ("current", "show_current")):
             with self.subTest(command=command):
                 result = self.bash(mock + '() { return 7; }\n'
@@ -302,10 +302,10 @@ class UpdateTests(unittest.TestCase):
                 self.assertEqual((result.stdout, result.stderr), ("status 7\n", ""))
 
     def test_use_starts_the_refresh_before_the_command(self):
-        self.write_cache("1.1.2", age=2 * 86400)
+        self.write_cache("1.2.1", age=2 * 86400)
         result = self.bash('use_command() { return 1; }\nmain use')
         self.assertEqual((result.returncode, result.stderr), (1, ""))
-        self.wait_for_cache("1.2.0")
+        self.wait_for_cache("1.8.0")
 
     # ccacc update
 
@@ -320,9 +320,9 @@ class UpdateTests(unittest.TestCase):
         # A source override in the environment would install something else.
         self.assertEqual(self.installer_env.read_text(), "unset\nunset\n")
         self.assertEqual(self.urls(), [LATEST_URL, INSTALLER_URL])
-        self.assertIn("Updating ccacc 1.1.2 to 1.2.0 in " + str(self.install_dir), result.stdout)
+        self.assertIn("Updating ccacc 1.2.1 to 1.8.0 in " + str(self.install_dir), result.stdout)
         self.assertIn("fake installer ran", result.stdout)
-        self.assertEqual(self.read_cache()["latest"], "1.2.0")
+        self.assertEqual(self.read_cache()["latest"], "1.8.0")
         self.assertEqual(list(self.fixture.glob("ccacc-update.*")), [])
 
     def test_update_through_relative_path_passes_absolute_prefix(self):
@@ -331,7 +331,7 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(self.installer_args(), ["--prefix", str(self.install_dir)])
 
     def test_update_refuses_same_or_older_version_without_force(self):
-        for tag, message in (("v1.1.2", "already the latest release"), ("v1.0.0", "newer than the latest release")):
+        for tag, message in (("v1.2.1", "already the latest release"), ("v1.0.0", "newer than the latest release")):
             with self.subTest(tag=tag):
                 self.calls.unlink(missing_ok=True)
                 self.env["RELEASE_RESPONSE"] = json.dumps({"tag_name": tag})
@@ -343,7 +343,7 @@ class UpdateTests(unittest.TestCase):
                 self.assertFalse(self.installer_log.exists())
 
     def test_update_force_reinstalls_same_version(self):
-        self.env["RELEASE_RESPONSE"] = json.dumps({"tag_name": "v1.1.2"})
+        self.env["RELEASE_RESPONSE"] = json.dumps({"tag_name": "v1.2.1"})
         result = self.run_ccacc("update", "--force")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.installer_args(), ["--prefix", str(self.install_dir)])
@@ -357,7 +357,7 @@ class UpdateTests(unittest.TestCase):
             with self.subTest(overrides=overrides):
                 self.env = {key: value for key, value in self.env.items()
                             if key not in ("RELEASE_FAIL", "INSTALLER_FAIL", "INSTALLER_EXIT")}
-                self.env["RELEASE_RESPONSE"] = json.dumps({"tag_name": "v1.2.0"})
+                self.env["RELEASE_RESPONSE"] = json.dumps({"tag_name": "v1.8.0"})
                 self.env.update(overrides)
                 result = self.run_ccacc("update")
                 self.assertNotEqual(result.returncode, 0)
@@ -366,7 +366,7 @@ class UpdateTests(unittest.TestCase):
 
     def test_help_lists_update(self):
         self.assertIn("update", self.run_ccacc("help").stdout)
-        self.assertEqual(self.run_ccacc("-v").stdout, "ccacc v1.1.2\n")
+        self.assertEqual(self.run_ccacc("-v").stdout, "ccacc v1.2.1\n")
 
 
 if __name__ == "__main__":

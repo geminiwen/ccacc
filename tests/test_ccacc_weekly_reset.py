@@ -111,10 +111,10 @@ class WeeklyResetTests(unittest.TestCase):
             else:
                 self.record("tokyo", value)
             self.assertEqual(self.bash('weekly_reset_label tokyo'), "")
-            self.assertNotRegex(self.bash('list_accounts'), r"\[\w{3} \d\d \w{3} \d\d:\d\d\]")
+            self.assertNotRegex(self.bash('list_accounts'), r"\w{3} \d\d \w{3} \d\d:\d\d")
             self.assertNotIn("Weekly", self.bash('show_current'))
         self.record("tokyo", f"{RESET}\n")
-        self.assertIn("[Thu 03 Jan 11:00]", self.bash('list_accounts'))
+        self.assertIn("Thu 03 Jan 11:00", self.bash('list_accounts'))
         self.assertIn("Weekly:     resets Thu 03 Jan 11:00", self.bash('show_current'))
         self.assertFalse(self.calls.exists())
 

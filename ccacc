@@ -13,7 +13,7 @@
 set -e
 
 SCRIPT_NAME="ccacc"
-VERSION="1.1.2"
+VERSION="1.2.1"
 # The canonical installer always comes from main; it installs the latest GitHub Release.
 INSTALLER_URL="https://raw.githubusercontent.com/geminiwen/ccacc/main/install.sh"
 INSTALL_COMMAND="curl -fsSL $INSTALLER_URL | bash"
@@ -111,7 +111,13 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 MAGENTA='\033[1;35m'
 CYAN='\033[0;36m'
+BOLD='\033[1m'
 NC='\033[0m' # No Color
+
+# One finished step: a green check mark and the message. Callers redirect it as needed.
+ok() {
+    echo -e "${GREEN}✓${NC} $*"
+}
 
 # Function to show usage
 usage() {
@@ -133,7 +139,7 @@ Commands:
   list, ls              List saved accounts
   current               Show the current Claude account
   save <name>           Save the current account
-  use [name]            Switch to a saved account
+  use [name] [-v]       Switch to a saved account (-v lists every backed-up path)
   new                   Log out to a clean session
   rm <name>             Delete a saved account${surge_line}
   timezone [name]       Print the session's or an account's timezone${usage_line}
@@ -617,7 +623,8 @@ stop_claude() {
     fi
     [ -n "$pids" ] || return 0
 
-    echo -e "${YELLOW}Stopping all Claude Code processes for the current user${NC}"
+    # confirm_close_claude already told the user; do not announce it twice.
+    [ -n "${_ccacc_stop_quiet:-}" ] || echo -e "${YELLOW}Stopping all Claude Code processes for the current user${NC}"
     for signal in TERM KILL; do
         for pid in $pids; do
             if [ "$guard" = --guard-ancestors ]; then
@@ -654,9 +661,13 @@ stop_claude() {
 
 # Function to point out Cowork device keys: Claude Code keeps them under one fixed keychain name
 # shared by every config dir, so ccacc leaves them alone (checks existence only, never reads them)
+# Shown once: a marker file records that the note was printed.
+DEVICE_KEYS_NOTED_FILE="$ACCOUNTS_DIR/.device-keys-noted"
 note_device_keys() {
+    [ ! -e "$DEVICE_KEYS_NOTED_FILE" ] || return 0
     if [ -e "$DEVICE_KEY_FILE" ] || { security find-generic-password -s "$DEVICE_KEY_SERVICE" > /dev/null 2>&1; }; then
         echo -e "${YELLOW}Note: Cowork device keys (${DEVICE_KEY_SERVICE}) are shared by all Claude Code config dirs and are not switched${NC}"
+        : > "$DEVICE_KEYS_NOTED_FILE" 2>/dev/null || :
     fi
 }
 
@@ -1154,7 +1165,7 @@ setup_surge() {
             echo -e "${RED}Error: Could not save Surge policies for '${name}'${NC}" >&2
             return 1
         fi
-        echo -e "${GREEN}Saved Surge policies for '${name}'${NC}"
+        ok "Saved Surge policies for ${name}"
     fi
 }
 
@@ -1189,7 +1200,7 @@ apply_surge() {
 
     if "$SURGE_CLI" --raw set "${args[@]}" 2>/dev/null | jq -e '.result == "success"' > /dev/null 2>&1; then
         local switched=$(printf '%s, ' "${args[@]#ProxyGroupSelection.}")
-        echo -e "${GREEN}Switched Surge: ${switched%, }${NC}"
+        ok "Surge: ${switched%, }"
     else
         echo -e "${YELLOW}Warning: surge-cli set failed, Surge policies not switched${NC}"
     fi
@@ -1256,38 +1267,56 @@ account_plan_label() {
         | gsub("[^ -~]"; "?") | .[0:40]' "$1" 2>/dev/null
 }
 
-# Function to list saved accounts
+# Pad text to a column width, then colour it; colour codes never count towards the width.
+list_cell() {
+    printf '%b%s%b%*s' "$1" "$3" "$NC" "$(($2 - ${#3}))" ''
+}
+
+# Function to list saved accounts as an aligned table. Columns nobody has
+# (plan, weekly reset, Surge) are left out; a missing value shows as '-'.
 list_accounts() {
     check_ready
-    echo -e "${BLUE}Saved accounts${NC} (${CONFIG_DIR}):"
-
-    local active=$(active_account)
-    local found=0
+    local active=$(active_account) file name value index=0 line
+    local w_name=0 w_email=0 w_plan=0 w_reset=0 any_surge=false
+    local -a names=() emails=() plans=() resets=() surges=()
     for file in "$ACCOUNTS_DIR"/*.json; do
-        if [ -f "$file" ]; then
-            found=1
-            local name=$(basename "$file" .json)
-            local email=$(jq -r '.oauthAccount.emailAddress // "not logged in"' "$file")
-            local plan=$(account_plan_label "$file")
-            email="${CYAN}${email}${NC}"
-            [ -z "$plan" ] || email="$email ${MAGENTA}[$plan]${NC}"
-            local reset=$(weekly_reset_label "$name")
-            [ -z "$reset" ] || email="$email ${BLUE}[${reset}]${NC}"
-            local surge=""
-            if [ -f "$ACCOUNTS_DIR/${name}.surge" ]; then
-                surge=" [Surge: $(jq -r 'to_entries | map("\(.key)=\(.value)") | join(", ")' "$ACCOUNTS_DIR/${name}.surge")]"
-            fi
-            if [ "$name" = "$active" ]; then
-                echo -e "  ${GREEN}* ${name}${NC} ${email}${surge} (active)"
-            else
-                echo -e "  ${YELLOW}  ${name}${NC} ${email}${surge}"
-            fi
+        [ -f "$file" ] || continue
+        name=$(basename "$file" .json)
+        names[index]=$name
+        emails[index]=$(jq -r '.oauthAccount.emailAddress // "not logged in"' "$file")
+        plans[index]=$(account_plan_label "$file")
+        resets[index]=$(weekly_reset_label "$name")
+        surges[index]=''
+        if [ -f "$ACCOUNTS_DIR/${name}.surge" ]; then
+            surges[index]=$(jq -r 'to_entries | map("\(.key)=\(.value)") | join(", ")' "$ACCOUNTS_DIR/${name}.surge")
+            [ -z "${surges[index]}" ] || any_surge=true
         fi
+        [ "${#name}" -le "$w_name" ] || w_name=${#name}
+        value=${emails[index]}; [ "${#value}" -le "$w_email" ] || w_email=${#value}
+        value=${plans[index]}; [ "${#value}" -le "$w_plan" ] || w_plan=${#value}
+        value=${resets[index]}; [ "${#value}" -le "$w_reset" ] || w_reset=${#value}
+        index=$((index + 1))
     done
 
-    if [ $found -eq 0 ]; then
+    if [ "$index" -eq 0 ]; then
         echo "No accounts saved. Save the current one with: $SCRIPT_NAME save <name>"
+        return 0
     fi
+
+    echo -e "${BOLD}Saved accounts${NC}"
+    for ((index = 0; index < ${#names[@]}; index++)); do
+        if [ "${names[index]}" = "$active" ]; then
+            line="${GREEN}*${NC} $(list_cell "$GREEN" "$w_name" "${names[index]}")"
+        else
+            line="  $(list_cell '' "$w_name" "${names[index]}")"
+        fi
+        line="$line  $(list_cell "$CYAN" "$w_email" "${emails[index]}")"
+        [ "$w_plan" -eq 0 ] || line="$line  $(list_cell "$MAGENTA" "$w_plan" "${plans[index]:--}")"
+        [ "$w_reset" -eq 0 ] || line="$line  $(list_cell "$BLUE" "$w_reset" "${resets[index]:--}")"
+        [ "$any_surge" = false ] || line="$line  ${surges[index]:--}"
+        # Trailing spaces from padding the last column are trimmed.
+        printf '%b\n' "${line%"${line##*[! ]}"}"
+    done
 }
 
 # Print the live login's weekly reset time (Unix seconds) from the endpoint
@@ -1451,6 +1480,7 @@ confirm_close_claude() {
         *) echo "Cancelled; Claude Code left running and nothing changed." >&2; return 1 ;;
     esac
     # Never stop the Claude Code session that is running this command.
+    local _ccacc_stop_quiet=yes
     stop_claude --guard-ancestors >&2 || { echo "Error: Claude Code was not closed; nothing changed" >&2; return 1; }
 }
 
@@ -1498,32 +1528,37 @@ save_command() (
         apply_surge "$name" || return 1
     fi
     _ccacc_profile_tx_committed=yes
-    echo -e "${GREEN}Saved Claude account ($(current_email)) as: ${name}${NC}"
+    ok "Saved $(current_email) as ${name}"
 )
 
 # Completed backup metadata only: inspect the outgoing stash, never live target
 # paths or credential/config values. Call only after save_account and stash_paths succeed.
 report_outgoing_backup() {
-    local outgoing="$1" stash="$ACCOUNTS_DIR/$1" entry label path found=false
-    printf "Backed up outgoing account to profile '%s'.\n" "$outgoing" >&2
-    printf 'Saved contents:\n' >&2
-    if [ -f "$ACCOUNTS_DIR/$outgoing.credentials" ]; then
-        printf '  - Claude login backup (plain file, not encrypted): ~/.claude/accounts/%s.credentials\n' "$outgoing" >&2
-    else
-        printf '  - No Claude login to back up (logged out); no login backup.\n' >&2
-    fi
-    printf '  - Account configuration snapshot: ~/.claude/accounts/%s.json\n' "$outgoing" >&2
-    printf '  - Archived account history/session/cache paths:\n' >&2
+    local outgoing="$1" verbose="${2:-}" stash="$ACCOUNTS_DIR/$1" entry label path login=no login_text count=0
+    local -a archived=()
+    if [ -f "$ACCOUNTS_DIR/$outgoing.credentials" ]; then login=yes; fi
     for entry in "${ACCOUNT_PATHS[@]}"; do
         label="${entry%%|*}"
         path="$stash/$label"
         if [ -e "$path" ] || [ -L "$path" ]; then
-            printf '      %s: %s\n' "$label" "~${path#"$HOME"}" >&2
-            found=true
+            archived+=("$label")
+            count=$((count + 1))
         fi
     done
-    if [ "$found" = false ]; then printf '      (none archived)\n' >&2; fi
-    printf 'Saved timezone (TZ) and Surge choices remain unchanged.\n' >&2
+    if [ "$login" = yes ]; then login_text=login; else login_text='no login (logged out)'; fi
+    ok "Backed up $outgoing: $login_text, config, $count history item$([ "$count" -eq 1 ] || echo s) → ~/.claude/accounts/$outgoing" >&2
+    [ "$verbose" = --verbose ] || return 0
+    if [ "$login" = yes ]; then
+        printf '    login:  ~/.claude/accounts/%s.credentials (plain file, not encrypted)\n' "$outgoing" >&2
+    fi
+    printf '    config: ~/.claude/accounts/%s.json\n' "$outgoing" >&2
+    if [ "$count" -eq 0 ]; then
+        printf '    history: (none archived)\n' >&2
+    else
+        for label in "${archived[@]}"; do
+            printf '    %s: ~/.claude/accounts/%s/%s\n' "$label" "$outgoing" "$label" >&2
+        done
+    fi
 }
 
 # Any trace of a named profile (backup, login, timezone or history stash), even a
@@ -1753,14 +1788,15 @@ pick_saved_account() (
 # Function to switch to a saved account
 use_command() (
     local name='' name_seen=false zone active mode=false answer='' staged_mode='' mode_option='' status
-    local always_yolo leftovers discard=''
+    local always_yolo leftovers discard='' verbose=''
     while [ "$#" -gt 0 ]; do
         case "$1" in
+            -v|--verbose) verbose=--verbose ;;
             --yolo|--no-yolo)
                 [ -z "$mode_option" ] || { echo "Error: Duplicate or conflicting launch mode options" >&2; return 1; }
                 mode_option="$1"
                 if [ "$1" = --yolo ]; then mode=true; fi ;;
-            -*) echo "Error: Unknown use option '$1'; expected --yolo or --no-yolo" >&2; return 1 ;;
+            -*) echo "Error: Unknown use option '$1'; expected --yolo, --no-yolo or --verbose" >&2; return 1 ;;
             *)
                 [ "$name_seen" = false ] || { echo "Error: use accepts at most one account name" >&2; return 1; }
                 check_name "$1" >&2 || return 1
@@ -1842,7 +1878,7 @@ use_command() (
     if [ "$active" = "$name" ]; then
         mv -f "$staged_mode" "$LAUNCH_MODE_FILE" || return 1
         rm -f "$UNNAMED_SESSION_FILE" || return 1
-        echo -e "${YELLOW}'${name}' is already active${NC}"
+        ok "${name} is already active"
         record_weekly_reset "$name"
         # Re-apply the saved Surge policies, undoing manual changes in Surge.
         apply_surge "$name" || return 1
@@ -1859,7 +1895,7 @@ use_command() (
     load_account "$name" || return 1
     if [ -n "$active" ]; then
         stash_paths "$active" || return 1
-        report_outgoing_backup "$active"
+        report_outgoing_backup "$active" "$verbose"
     fi
     unstash_paths "$name" || return 1
     echo "$name" > "$ACTIVE_FILE" || return 1
@@ -1867,7 +1903,7 @@ use_command() (
     apply_surge "$name" || return 1
     mv -f "$staged_mode" "$LAUNCH_MODE_FILE" || return 1
     rm -f "$UNNAMED_SESSION_FILE" || return 1
-    echo -e "${GREEN}Switched to Claude account: ${name} ($(current_email))${NC}"
+    ok "Switched to ${name} ($(current_email))"
 )
 
 # Cleanup never signals a PID taken from a config record. Ancestors and
@@ -2382,7 +2418,7 @@ new_command() {
     selected_zone=$(choose_timezone 'unnamed session' optional) || return 1
     cleanup_session_preflight || return 1
     cleanup_session_commit new || return 1
-    echo "Cleaned current account; started unnamed Claude session (logged out)."
+    ok "Cleaned current account; started an unnamed, logged-out Claude session"
     if find_surge; then
         echo -e "${YELLOW}Note: switch Surge to the right profile for the new account before logging in${NC}"
     fi
@@ -2474,7 +2510,7 @@ delete_command() (
     trap 'exit 130' INT
     _ccacc_profile_tx_stage || return 1
     _ccacc_profile_tx_committed=yes
-    echo -e "${GREEN}Deleted account: ${name}${NC}"
+    ok "Deleted ${name}"
 )
 
 # ccacc relies on the macOS keychain (/usr/bin/security); refuse anything else.

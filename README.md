@@ -148,14 +148,21 @@ it is recorded, otherwise the organization type (Team, Enterprise, Pro or Max).
 
 Switching between saved accounts automatically saves the latest outgoing login
 and account configuration, then archives its history/session/cache paths,
-including `~/.claude/sessions`. After saving and archival succeed, it reports the
-outgoing profile, login backup (or logged-out state), configuration
-snapshot and actual archived paths on stderr, without printing their contents.
-Named noninteractive switches need no backup confirmation:
+including `~/.claude/sessions`. After saving and archival succeed, it prints one
+summary line on stderr, without printing any contents:
+
+```text
+✓ Backed up personal: login, config, 9 history items → ~/.claude/accounts/personal
+✓ Switched to work (work@example.com)
+```
+
+`-v`/`--verbose` also lists the login backup, configuration snapshot and every
+archived path. Named noninteractive switches need no backup confirmation:
 
 ```bash
 ccacc use work --no-yolo
 ccacc use work --yolo
+ccacc use work --no-yolo --verbose
 ```
 
 On a terminal, use asks `YOLO? (y/N)` unless `--yolo` or `--no-yolo` is explicit

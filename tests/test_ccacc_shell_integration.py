@@ -19,15 +19,20 @@ ROOT = Path(__file__).resolve().parents[1]
 JQ = shutil.which("jq")
 
 
-def home_files(home):
-    """Files under a fixture HOME for snapshots, without the shell's own history.
+# History files that interactive shells write at the HOME root on their own.
+SHELL_HISTORY_FILES = {Path(".bash_history"), Path(".zsh_history"), Path(".zhistory"), Path(".sh_history")}
 
-    An interactive fixture bash saves its history to $HOME/.bash_history on exit
-    whenever HISTFILE is not exported to elsewhere; that file is written by bash,
-    not ccacc, so only that one name at the HOME root is left out.
+
+def home_files(home):
+    """Files under a fixture HOME for snapshots, without the shells' own history.
+
+    An interactive fixture shell saves its history to a file at the HOME root
+    (bash: .bash_history) whenever HISTFILE is not exported to elsewhere. Those
+    files are written by the shell, not ccacc, so only these names at the HOME
+    root are left out; anything else ccacc writes still shows up.
     """
     return [path for path in home.rglob("*")
-            if path.is_file() and path.relative_to(home) != Path(".bash_history")]
+            if path.is_file() and path.relative_to(home) not in SHELL_HISTORY_FILES]
 
 
 class ShellIntegrationTests(unittest.TestCase):

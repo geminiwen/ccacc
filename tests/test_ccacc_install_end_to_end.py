@@ -57,7 +57,8 @@ class InstallEndToEndTests(unittest.TestCase):
                        TMPDIR=str(home), XDG_CONFIG_HOME=str(home / ".config"),
                        BASH_ENV="/dev/null", CCACC_E2E_SOURCE=str(ROOT),
                        CCACC_INSTALL_REF="1" * 40, TZ="Asia/Tokyo")
-            for key in ("ZDOTDIR", "CCACC_INSTALL_REPO"):
+            # zsh -i must not append to the caller's real history file.
+            for key in ("ZDOTDIR", "CCACC_INSTALL_REPO", "HISTFILE"):
                 env.pop(key, None)
 
             def install():

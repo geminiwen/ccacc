@@ -19,6 +19,22 @@ ROOT = Path(__file__).resolve().parents[1]
 JQ = shutil.which("jq")
 
 
+# History files that interactive shells write at the HOME root on their own.
+SHELL_HISTORY_FILES = {Path(".bash_history"), Path(".zsh_history"), Path(".zhistory"), Path(".sh_history")}
+
+
+def home_files(home):
+    """Files under a fixture HOME for snapshots, without the shells' own history.
+
+    An interactive fixture shell saves its history to a file at the HOME root
+    (bash: .bash_history) whenever HISTFILE is not exported to elsewhere. Those
+    files are written by the shell, not ccacc, so only these names at the HOME
+    root are left out; anything else ccacc writes still shows up.
+    """
+    return [path for path in home.rglob("*")
+            if path.is_file() and path.relative_to(home) not in SHELL_HISTORY_FILES]
+
+
 class ShellIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.reset_fixture()
@@ -50,7 +66,9 @@ class ShellIntegrationTests(unittest.TestCase):
                         LAUNCHES=str(self.launches), WRAPPERS=str(self.wrappers),
                         FORBIDDEN=str(self.forbidden), JQ_ARGV_LOG=str(self.argv),
                         FIXTURE_CORE=str(self.core))
-        for name in ("ZDOTDIR", "BASH_ENV", "ENV", "CLAUDE_CONFIG_DIR"):
+        # An inherited HISTFILE would let the fixture's interactive shells append
+        # to the caller's real history; without it they stay in the fixture HOME.
+        for name in ("ZDOTDIR", "BASH_ENV", "ENV", "CLAUDE_CONFIG_DIR", "HISTFILE"):
             self.env.pop(name, None)
         for name in ("ps", "kill", "security", "osascript", "surge-cli", "openssl",
                      "curl", "wget", "open", "op"):
@@ -285,14 +303,14 @@ apply_surge() { :; }
                 aliases.mkdir()
                 (aliases / "sydney.json").write_text(json.dumps({"env": {"TZ": "Asia/Tokyo"}}))
                 before = {path.relative_to(self.home): path.read_bytes()
-                          for path in self.home.rglob("*") if path.is_file()}
+                          for path in home_files(self.home)}
                 hook = shlex.quote(str(self.home / ".ccacc-shell/hook.sh"))
                 result = self.interactive(shell, f". {hook}\nclaude\nexit 0\n", startup=False)
                 self.assertIn("cannot read the active account timezone", result.stderr)
                 self.assertNotIn("Choose timezone", result.stderr)
                 self.assertFalse(self.launches.exists())
                 self.assertEqual(before, {path.relative_to(self.home): path.read_bytes()
-                                          for path in self.home.rglob("*") if path.is_file()})
+                                          for path in home_files(self.home)})
 
     def test_installed_operations_are_read_only_even_with_readonly_startup(self):
         for shell in ("bash", "zsh"):

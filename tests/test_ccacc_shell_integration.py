@@ -61,7 +61,9 @@ class ShellIntegrationTests(unittest.TestCase):
                         LAUNCHES=str(self.launches), WRAPPERS=str(self.wrappers),
                         FORBIDDEN=str(self.forbidden), JQ_ARGV_LOG=str(self.argv),
                         FIXTURE_CORE=str(self.core))
-        for name in ("ZDOTDIR", "BASH_ENV", "ENV", "CLAUDE_CONFIG_DIR"):
+        # An inherited HISTFILE would let the fixture's interactive shells append
+        # to the caller's real history; without it they stay in the fixture HOME.
+        for name in ("ZDOTDIR", "BASH_ENV", "ENV", "CLAUDE_CONFIG_DIR", "HISTFILE"):
             self.env.pop(name, None)
         for name in ("ps", "kill", "security", "osascript", "surge-cli", "openssl",
                      "curl", "wget", "open", "op"):

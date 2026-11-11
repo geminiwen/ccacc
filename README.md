@@ -231,13 +231,18 @@ fails, an earlier record stays. Set `CCACC_NO_WEEKLY_RESET=1` to turn it off.
 
 ## Login expiry
 
-`list` and `current` show when each saved login stops renewing itself: the time
-its refresh token expires (`login 10 Dec 16:57`). After that the profile needs a
-fresh `/login`. The time turns yellow with less than 7 days left and reads
-`login expired` in red once past. The active profile reads the live Keychain
+`list` (the LOGIN column) and `current` show when each saved login stops
+renewing itself: the time its refresh token expires. After that the profile
+needs a fresh `/login`. The time turns yellow with less than 7 days left and
+reads `expired` in red once past. The active profile reads the live Keychain
 login, which Claude Code may have renewed since the last save; other profiles
 read their login backup. Only the timestamp is read; tokens are never shown or
 sent anywhere.
+
+`list` prints one line per profile under a header (the weekly reset there shows
+just the weekday and time: it is always within a week). When that table is wider
+than the terminal, each profile takes two lines instead: name, email and plan,
+then the weekly reset, login expiry and Surge policies underneath.
 
 ## Backup boundaries
 

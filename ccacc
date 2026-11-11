@@ -1273,13 +1273,31 @@ list_cell() {
     printf '%b%s%b%*s' "$1" "$3" "$NC" "$(($2 - ${#3}))" ''
 }
 
-# Function to list saved accounts as an aligned table. Columns nobody has
-# (plan, weekly reset, login expiry, Surge) are left out; a missing value shows as '-'.
-# A login expiring within 7 days is yellow, an expired one red.
+stdout_is_terminal() {
+    [ -t 1 ]
+}
+
+# Columns that fit on one line of the terminal; empty when unknown. COLUMNS is the
+# fallback when the size cannot be read. Callers check that stdout is a terminal
+# first: inside $(...) stdout is always a pipe.
+terminal_columns() {
+    local size
+    size=$(stty size < /dev/tty 2>/dev/null) || size=''
+    size=${size##* }
+    [[ "$size" =~ ^[1-9][0-9]*$ ]] || size=${COLUMNS:-}
+    [[ "$size" =~ ^[1-9][0-9]*$ ]] && printf '%s' "$size" || :
+}
+
+# Function to list saved accounts as an aligned table under a header. Columns
+# nobody has (plan, weekly reset, login expiry, Surge) are left out; a missing
+# value shows as '-'. The weekly reset is always within a week, so its weekday
+# suffices; the login expiry shows only the date, yellow with under 7 days left
+# and red once expired. When the table is wider than the terminal, each account
+# takes two lines instead: name, email and plan, then the rest underneath.
 list_accounts() {
     check_ready
-    local active=$(active_account) file name value index=0 line
-    local w_name=0 w_email=0 w_plan=0 w_reset=0 w_login=0 any_surge=false expiry
+    local active=$(active_account) file name value index=0 line details columns marker
+    local w_name=4 w_email=5 w_plan=0 w_reset=0 w_login=0 w_surge=0 expiry width
     local -a names=() emails=() plans=() resets=() logins=() login_colors=() surges=()
     for file in "$ACCOUNTS_DIR"/*.json; do
         [ -f "$file" ] || continue
@@ -1287,11 +1305,11 @@ list_accounts() {
         names[index]=$name
         emails[index]=$(jq -r '.oauthAccount.emailAddress // "not logged in"' "$file")
         plans[index]=$(account_plan_label "$file")
-        resets[index]=$(weekly_reset_label "$name")
+        resets[index]=$(weekly_reset_label "$name" "%a %H:%M")
         if [ "$name" = "$active" ]; then
-            expiry=$(login_expiry_label "$name" active)
+            expiry=$(login_expiry_label "$name" active "%d %b")
         else
-            expiry=$(login_expiry_label "$name")
+            expiry=$(login_expiry_label "$name" '' "%d %b")
         fi
         logins[index]=${expiry#*$'\t'}
         case "${expiry%%$'\t'*}" in
@@ -1302,13 +1320,13 @@ list_accounts() {
         surges[index]=''
         if [ -f "$ACCOUNTS_DIR/${name}.surge" ]; then
             surges[index]=$(jq -r 'to_entries | map("\(.key)=\(.value)") | join(", ")' "$ACCOUNTS_DIR/${name}.surge")
-            [ -z "${surges[index]}" ] || any_surge=true
         fi
         [ "${#name}" -le "$w_name" ] || w_name=${#name}
         value=${emails[index]}; [ "${#value}" -le "$w_email" ] || w_email=${#value}
         value=${plans[index]}; [ "${#value}" -le "$w_plan" ] || w_plan=${#value}
         value=${resets[index]}; [ "${#value}" -le "$w_reset" ] || w_reset=${#value}
         value=${logins[index]}; [ "${#value}" -le "$w_login" ] || w_login=${#value}
+        value=${surges[index]}; [ "${#value}" -le "$w_surge" ] || w_surge=${#value}
         index=$((index + 1))
     done
 
@@ -1317,7 +1335,28 @@ list_accounts() {
         return 0
     fi
 
+    # Present columns are at least as wide as their header.
+    [ "$w_plan" -eq 0 ] || [ "$w_plan" -ge 4 ] || w_plan=4
+    [ "$w_reset" -eq 0 ] || [ "$w_reset" -ge 6 ] || w_reset=6
+    [ "$w_login" -eq 0 ] || [ "$w_login" -ge 5 ] || w_login=5
+    [ "$w_surge" -eq 0 ] || [ "$w_surge" -ge 5 ] || w_surge=5
+    width=$((2 + w_name + 2 + w_email))
+    for value in "$w_plan" "$w_reset" "$w_login" "$w_surge"; do
+        [ "$value" -eq 0 ] || width=$((width + 2 + value))
+    done
+    # Output that is not a terminal is never wrapped: stay on one line.
+    columns=''
+    ! stdout_is_terminal || columns=$(terminal_columns)
+
     echo -e "${BOLD}Saved accounts${NC}"
+    if [ -z "$columns" ] || [ "$width" -le "$columns" ]; then
+        line="  $(list_cell '' "$w_name" NAME)  $(list_cell '' "$w_email" EMAIL)"
+        [ "$w_plan" -eq 0 ] || line="$line  $(list_cell '' "$w_plan" PLAN)"
+        [ "$w_reset" -eq 0 ] || line="$line  $(list_cell '' "$w_reset" WEEKLY)"
+        [ "$w_login" -eq 0 ] || line="$line  $(list_cell '' "$w_login" LOGIN)"
+        [ "$w_surge" -eq 0 ] || line="$line  SURGE"
+        printf '%b\n' "${line%"${line##*[! ]}"}"
+    fi
     for ((index = 0; index < ${#names[@]}; index++)); do
         if [ "${names[index]}" = "$active" ]; then
             line="${GREEN}*${NC} $(list_cell "$GREEN" "$w_name" "${names[index]}")"
@@ -1326,11 +1365,27 @@ list_accounts() {
         fi
         line="$line  $(list_cell "$CYAN" "$w_email" "${emails[index]}")"
         [ "$w_plan" -eq 0 ] || line="$line  $(list_cell "$MAGENTA" "$w_plan" "${plans[index]:--}")"
-        [ "$w_reset" -eq 0 ] || line="$line  $(list_cell "$BLUE" "$w_reset" "${resets[index]:--}")"
-        [ "$w_login" -eq 0 ] || line="$line  $(list_cell "${login_colors[index]}" "$w_login" "${logins[index]:--}")"
-        [ "$any_surge" = false ] || line="$line  ${surges[index]:--}"
-        # Trailing spaces from padding the last column are trimmed.
+        if [ -z "$columns" ] || [ "$width" -le "$columns" ]; then
+            [ "$w_reset" -eq 0 ] || line="$line  $(list_cell "$BLUE" "$w_reset" "${resets[index]:--}")"
+            [ "$w_login" -eq 0 ] || line="$line  $(list_cell "${login_colors[index]}" "$w_login" "${logins[index]:--}")"
+            [ "$w_surge" -eq 0 ] || line="$line  ${surges[index]:--}"
+            # Trailing spaces from padding the last column are trimmed.
+            printf '%b\n' "${line%"${line##*[! ]}"}"
+            continue
+        fi
         printf '%b\n' "${line%"${line##*[! ]}"}"
+        # Second line: only the values this account has, under its email.
+        details=''
+        [ -z "${resets[index]}" ] || details="weekly ${BLUE}${resets[index]}${NC}"
+        if [ -n "${logins[index]}" ]; then
+            [ -z "$details" ] || details="$details  ·  "
+            details="${details}login ${login_colors[index]}${logins[index]}${NC}"
+        fi
+        if [ -n "${surges[index]}" ]; then
+            [ -z "$details" ] || details="$details  ·  "
+            details="$details${surges[index]}"
+        fi
+        [ -z "$details" ] || printf "%*s%b\n" "$((2 + w_name + 2))" '' "$details"
     done
 }
 
@@ -1387,35 +1442,39 @@ in_system_timezone() {
 
 # Print profile <name>'s next weekly reset in this computer's timezone, carried
 # forward a week at a time from the recorded one; nothing when none was recorded.
+# An optional strftime format replaces the default "%a %d %b %H:%M".
 weekly_reset_label() {
     local file="$ACCOUNTS_DIR/$1.weekly"
     [ -f "$file" ] && [ ! -L "$file" ] || return 0
-    in_system_timezone jq -Rr 'select(test("^[0-9]{9,11}\\n?\\z")) | rtrimstr("\n") | tonumber
+    in_system_timezone jq -Rr --arg format "${2:-%a %d %b %H:%M}" '
+        select(test("^[0-9]{9,11}\\n?\\z")) | rtrimstr("\n") | tonumber
         | . + ((now - .) / 604800 | if . > 0 then ceil else 0 end) * 604800
-        | strflocaltime("%a %d %b %H:%M")' "$file" 2>/dev/null || :
+        | strflocaltime($format)' "$file" 2>/dev/null || :
 }
 
-# Print "<level>\t<label>" for when profile <name>'s login (its refresh token)
+# Print "<level>\t<when>" for when profile <name>'s login (its refresh token)
 # expires, in this computer's timezone; nothing when unknown. Level is ok, soon
-# (under 7 days left) or expired. The active profile reads the live Keychain
-# login, which Claude Code may have renewed since the last save; others read
-# their backup. Only the timestamp leaves this function, never a token.
+# (under 7 days left) or expired; <when> is the time in strftime format [format]
+# (default "%d %b %H:%M"), or "expired". Pass "active" as [source] for the active
+# profile: it reads the live Keychain login, which Claude Code may have renewed
+# since the last save; others read their backup. Only the timestamp leaves this
+# function, never a token.
 login_expiry_label() {
-    local label=''
+    local label='' format="${3:-%d %b %H:%M}"
     if [ "${2:-}" = active ]; then
-        label=$(read_credentials 2>/dev/null | _login_expiry_label) || label=''
+        label=$(read_credentials 2>/dev/null | _login_expiry_label "$format") || label=''
     fi
-    [ -n "$label" ] || label=$(read_backup "$1" 2>/dev/null | _login_expiry_label) || label=''
+    [ -n "$label" ] || label=$(read_backup "$1" 2>/dev/null | _login_expiry_label "$format") || label=''
     printf '%s' "$label"
 }
 
 _login_expiry_label() {
-    in_system_timezone jq -r '
+    in_system_timezone jq -r --arg format "$1" '
         .claudeAiOauth? | objects | .refreshTokenExpiresAt | numbers
         | (. / 1000 | floor)
-        | if . <= now then "expired\tlogin expired"
+        | if . <= now then "expired\texpired"
           else (if . - now < 7 * 86400 then "soon" else "ok" end)
-               + "\tlogin " + strflocaltime("%d %b %H:%M") end' 2>/dev/null || :
+               + "\t" + strflocaltime($format) end' 2>/dev/null || :
 }
 
 # Function to show the current account
@@ -1432,8 +1491,7 @@ show_current() {
             expired) color=$RED ;;
             soon) color=$YELLOW ;;
         esac
-        # "login 10 Dec 16:57" reads "until 10 Dec 16:57" here; "login expired" reads "expired".
-        expiry=${expiry#*$'\t'}; expiry=${expiry#login }
+        expiry=${expiry#*$'\t'}
         [ "$expiry" = expired ] || expiry="until $expiry"
         echo -e "Login:      ${color}${expiry}${NC}"
     fi

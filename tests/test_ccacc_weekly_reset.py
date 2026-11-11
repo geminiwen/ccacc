@@ -112,10 +112,10 @@ class WeeklyResetTests(unittest.TestCase):
             else:
                 self.record("tokyo", value)
             self.assertEqual(self.bash('weekly_reset_label tokyo'), "")
-            self.assertNotRegex(self.bash('list_accounts'), r"\w{3} \d\d \w{3} \d\d:\d\d")
+            self.assertNotRegex(self.bash('list_accounts'), r"WEEKLY|\w{3} \d\d:\d\d")
             self.assertNotIn("Weekly", self.bash('show_current'))
         self.record("tokyo", f"{RESET}\n")
-        self.assertIn("Thu 03 Jan 11:00", self.bash('list_accounts'))
+        self.assertRegex(re.sub(r"\x1b\[[0-9;]*m", "", self.bash('list_accounts')), r"WEEKLY\n.*Thu 11:00")
         self.assertIn("Weekly:     resets Thu 03 Jan 11:00", self.bash('show_current'))
         self.assertFalse(self.calls.exists())
 
@@ -125,6 +125,7 @@ class LoginExpiryTests(unittest.TestCase):
 
     setUp = WeeklyResetTests.setUp
     bash = WeeklyResetTests.bash
+    record = WeeklyResetTests.record
 
     def save(self, name, refresh_expires_at):
         (self.accounts / (name + ".json")).write_text(
@@ -148,29 +149,51 @@ class LoginExpiryTests(unittest.TestCase):
         self.save("unknown", None)
         listing = self.bash("CCACC_NO_WEEKLY_RESET=1 list_accounts", credentials={})
         self.assertNotIn(TOKEN, listing)
-        self.assertRegex(self.plain(listing), r"later@example\.com +login 03 Jan 11:00\n")
+        self.assertRegex(self.plain(listing), r"  NAME +EMAIL +LOGIN\n")
+        self.assertRegex(self.plain(listing), r"later@example\.com +03 Jan\n")
         self.assertNotIn(YELLOW, self.row(listing, "later"))
         self.assertNotIn(RED, self.row(listing, "later"))
         soon = time.strftime("%d %b %H:%M", time.gmtime(int(now + 3 * 86400)))
-        self.assertIn(YELLOW + "login " + soon, self.row(listing, "soon"))
-        self.assertIn(RED + "login expired", self.row(listing, "gone"))
+        self.assertIn(YELLOW + soon[:6], self.row(listing, "soon"))
+        self.assertIn(RED + "expired", self.row(listing, "gone"))
         self.assertRegex(self.plain(self.row(listing, "unknown")), r"unknown@example\.com\s+-$")
 
     def test_active_account_prefers_the_live_keychain_login(self):
         self.save("tokyo", int((time.time() - 60) * 1000))
         (self.accounts / ".active").write_text("tokyo\n")
         live = {"claudeAiOauth": {"accessToken": TOKEN, "refreshTokenExpiresAt": RESET * 1000}}
-        self.assertIn("login 03 Jan 11:00", self.plain(self.bash("list_accounts", credentials=live)))
+        self.assertRegex(self.plain(self.bash("list_accounts", credentials=live)), r"tokyo@example\.com +03 Jan\n")
         # Without a readable live login the backup still answers.
-        self.assertIn("login expired", self.plain(self.bash("list_accounts", credentials={})))
+        self.assertRegex(self.plain(self.bash("list_accounts", credentials={})), r"tokyo@example\.com +expired\n")
         self.assertIn("Login:      until 03 Jan 11:00", self.plain(self.bash("show_current", credentials=live)))
         self.assertIn("Login:      " + RED + "expired", self.bash("show_current", credentials={}))
 
     def test_no_expiry_anywhere_leaves_the_column_out(self):
         self.save("tokyo", None)
-        self.assertNotIn("login", self.bash("list_accounts", credentials={}))
+        self.assertNotIn("LOGIN", self.bash("list_accounts", credentials={}))
         (self.accounts / ".active").write_text("tokyo\n")
         self.assertNotIn("Login", self.bash("show_current", credentials={}))
+
+    def test_narrow_terminal_moves_details_to_a_second_line(self):
+        self.save("tokyo", RESET * 1000)
+        self.save("bare", None)
+        (self.accounts / "tokyo.surge").write_text(json.dumps({"Claude": "JP1"}))
+        self.record("tokyo", f"{RESET}\n")
+        terminal = "stdout_is_terminal() { :; }\nterminal_columns() { echo %d; }\n"
+        wide = self.plain(self.bash(terminal % 200 + "list_accounts", credentials={}))
+        self.assertEqual(wide.splitlines()[1:], [
+            "  NAME   EMAIL              WEEKLY     LOGIN   SURGE",
+            "  bare   bare@example.com   -          -       -",
+            "  tokyo  tokyo@example.com  Thu 11:00  03 Jan  Claude=JP1"])
+        width = len(wide.splitlines()[3])
+        self.assertEqual(self.plain(self.bash(terminal % width + "list_accounts", credentials={})), wide)
+        narrow = self.plain(self.bash(terminal % (width - 1) + "list_accounts", credentials={}))
+        self.assertEqual(narrow.splitlines()[1:], [
+            "  bare   bare@example.com",
+            "  tokyo  tokyo@example.com",
+            "         weekly Thu 11:00  ·  login 03 Jan  ·  Claude=JP1"])
+        # Output that is not a terminal stays on one line whatever the width.
+        self.assertEqual(self.plain(self.bash("terminal_columns() { echo 10; }\nlist_accounts", credentials={})), wide)
 
 
 YELLOW = "\x1b[1;33m"

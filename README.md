@@ -79,7 +79,7 @@ ccacc save work                              # Choose work's saved timezone inde
 ccacc use personal                          # Auto-back up outgoing account, choose YOLO, switch
 ccacc use                                   # Pick a saved profile in the terminal
 ccacc list                                  # List profiles; ls is an alias
-ccacc current                               # Show current email, saved name and weekly reset
+ccacc current                               # Show current email, saved name, weekly reset and login expiry
 ccacc timezone                              # Read the current session timezone
 ccacc timezone work                         # Read a saved profile's timezone
 ccacc rename work office                    # Rename a profile; login, history and YOLO choice follow
@@ -228,6 +228,16 @@ time, in the session's timezone, without going online again. A profile with no
 recorded reset shows none. The lookup uses only an unexpired access token from the
 Keychain (never refreshes it) and passes it to `curl` on standard input; when it
 fails, an earlier record stays. Set `CCACC_NO_WEEKLY_RESET=1` to turn it off.
+
+## Login expiry
+
+`list` and `current` show when each saved login stops renewing itself: the time
+its refresh token expires (`login 10 Dec 16:57`). After that the profile needs a
+fresh `/login`. The time turns yellow with less than 7 days left and reads
+`login expired` in red once past. The active profile reads the live Keychain
+login, which Claude Code may have renewed since the last save; other profiles
+read their login backup. Only the timestamp is read; tokens are never shown or
+sent anywhere.
 
 ## Backup boundaries
 

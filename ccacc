@@ -1274,12 +1274,13 @@ list_cell() {
 }
 
 # Function to list saved accounts as an aligned table. Columns nobody has
-# (plan, weekly reset, Surge) are left out; a missing value shows as '-'.
+# (plan, weekly reset, login expiry, Surge) are left out; a missing value shows as '-'.
+# A login expiring within 7 days is yellow, an expired one red.
 list_accounts() {
     check_ready
     local active=$(active_account) file name value index=0 line
-    local w_name=0 w_email=0 w_plan=0 w_reset=0 any_surge=false
-    local -a names=() emails=() plans=() resets=() surges=()
+    local w_name=0 w_email=0 w_plan=0 w_reset=0 w_login=0 any_surge=false expiry
+    local -a names=() emails=() plans=() resets=() logins=() login_colors=() surges=()
     for file in "$ACCOUNTS_DIR"/*.json; do
         [ -f "$file" ] || continue
         name=$(basename "$file" .json)
@@ -1287,6 +1288,17 @@ list_accounts() {
         emails[index]=$(jq -r '.oauthAccount.emailAddress // "not logged in"' "$file")
         plans[index]=$(account_plan_label "$file")
         resets[index]=$(weekly_reset_label "$name")
+        if [ "$name" = "$active" ]; then
+            expiry=$(login_expiry_label "$name" active)
+        else
+            expiry=$(login_expiry_label "$name")
+        fi
+        logins[index]=${expiry#*$'\t'}
+        case "${expiry%%$'\t'*}" in
+            expired) login_colors[index]=$RED ;;
+            soon) login_colors[index]=$YELLOW ;;
+            *) login_colors[index]='' ;;
+        esac
         surges[index]=''
         if [ -f "$ACCOUNTS_DIR/${name}.surge" ]; then
             surges[index]=$(jq -r 'to_entries | map("\(.key)=\(.value)") | join(", ")' "$ACCOUNTS_DIR/${name}.surge")
@@ -1296,6 +1308,7 @@ list_accounts() {
         value=${emails[index]}; [ "${#value}" -le "$w_email" ] || w_email=${#value}
         value=${plans[index]}; [ "${#value}" -le "$w_plan" ] || w_plan=${#value}
         value=${resets[index]}; [ "${#value}" -le "$w_reset" ] || w_reset=${#value}
+        value=${logins[index]}; [ "${#value}" -le "$w_login" ] || w_login=${#value}
         index=$((index + 1))
     done
 
@@ -1314,6 +1327,7 @@ list_accounts() {
         line="$line  $(list_cell "$CYAN" "$w_email" "${emails[index]}")"
         [ "$w_plan" -eq 0 ] || line="$line  $(list_cell "$MAGENTA" "$w_plan" "${plans[index]:--}")"
         [ "$w_reset" -eq 0 ] || line="$line  $(list_cell "$BLUE" "$w_reset" "${resets[index]:--}")"
+        [ "$w_login" -eq 0 ] || line="$line  $(list_cell "${login_colors[index]}" "$w_login" "${logins[index]:--}")"
         [ "$any_surge" = false ] || line="$line  ${surges[index]:--}"
         # Trailing spaces from padding the last column are trimmed.
         printf '%b\n' "${line%"${line##*[! ]}"}"
@@ -1381,14 +1395,48 @@ weekly_reset_label() {
         | strflocaltime("%a %d %b %H:%M")' "$file" 2>/dev/null || :
 }
 
+# Print "<level>\t<label>" for when profile <name>'s login (its refresh token)
+# expires, in this computer's timezone; nothing when unknown. Level is ok, soon
+# (under 7 days left) or expired. The active profile reads the live Keychain
+# login, which Claude Code may have renewed since the last save; others read
+# their backup. Only the timestamp leaves this function, never a token.
+login_expiry_label() {
+    local label=''
+    if [ "${2:-}" = active ]; then
+        label=$(read_credentials 2>/dev/null | _login_expiry_label) || label=''
+    fi
+    [ -n "$label" ] || label=$(read_backup "$1" 2>/dev/null | _login_expiry_label) || label=''
+    printf '%s' "$label"
+}
+
+_login_expiry_label() {
+    in_system_timezone jq -r '
+        .claudeAiOauth? | objects | .refreshTokenExpiresAt | numbers
+        | (. / 1000 | floor)
+        | if . <= now then "expired\tlogin expired"
+          else (if . - now < 7 * 86400 then "soon" else "ok" end)
+               + "\tlogin " + strflocaltime("%d %b %H:%M") end' 2>/dev/null || :
+}
+
 # Function to show the current account
 show_current() {
     check_ready
-    local active=$(active_account) reset=''
+    local active=$(active_account) reset='' expiry='' color=''
     echo -e "Account:    $(current_email)"
     echo -e "Saved as:   ${active:-(not saved)}"
     [ -z "$active" ] || reset=$(weekly_reset_label "$active")
     [ -z "$reset" ] || echo -e "Weekly:     resets ${reset}"
+    [ -z "$active" ] || expiry=$(login_expiry_label "$active" active)
+    if [ -n "$expiry" ]; then
+        case "${expiry%%$'\t'*}" in
+            expired) color=$RED ;;
+            soon) color=$YELLOW ;;
+        esac
+        # "login 10 Dec 16:57" reads "until 10 Dec 16:57" here; "login expired" reads "expired".
+        expiry=${expiry#*$'\t'}; expiry=${expiry#login }
+        [ "$expiry" = expired ] || expiry="until $expiry"
+        echo -e "Login:      ${color}${expiry}${NC}"
+    fi
     echo -e "Config dir: ${CONFIG_DIR}"
 }
 

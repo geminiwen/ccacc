@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -117,6 +118,63 @@ class WeeklyResetTests(unittest.TestCase):
         self.assertIn("Thu 03 Jan 11:00", self.bash('list_accounts'))
         self.assertIn("Weekly:     resets Thu 03 Jan 11:00", self.bash('show_current'))
         self.assertFalse(self.calls.exists())
+
+
+class LoginExpiryTests(unittest.TestCase):
+    """list shows when each saved login's refresh token expires."""
+
+    setUp = WeeklyResetTests.setUp
+    bash = WeeklyResetTests.bash
+
+    def save(self, name, refresh_expires_at):
+        (self.accounts / (name + ".json")).write_text(
+            json.dumps({"oauthAccount": {"emailAddress": name + "@example.com"}}))
+        oauth = {"accessToken": TOKEN, "refreshToken": "sk-ant-ort01-fixture_refresh"}
+        if refresh_expires_at is not None:
+            oauth["refreshTokenExpiresAt"] = refresh_expires_at
+        (self.accounts / (name + ".credentials")).write_text(json.dumps({"claudeAiOauth": oauth}))
+
+    def plain(self, text):
+        return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+    def row(self, listing, name):
+        return next(line for line in listing.splitlines() if self.plain(line)[2:].startswith(name + " "))
+
+    def test_list_shows_backup_expiry_coloured_by_time_left(self):
+        now = time.time()
+        self.save("later", RESET * 1000)
+        self.save("soon", int((now + 3 * 86400) * 1000))
+        self.save("gone", int((now - 60) * 1000))
+        self.save("unknown", None)
+        listing = self.bash("CCACC_NO_WEEKLY_RESET=1 list_accounts", credentials={})
+        self.assertNotIn(TOKEN, listing)
+        self.assertRegex(self.plain(listing), r"later@example\.com +login 03 Jan 11:00\n")
+        self.assertNotIn(YELLOW, self.row(listing, "later"))
+        self.assertNotIn(RED, self.row(listing, "later"))
+        soon = time.strftime("%d %b %H:%M", time.gmtime(int(now + 3 * 86400)))
+        self.assertIn(YELLOW + "login " + soon, self.row(listing, "soon"))
+        self.assertIn(RED + "login expired", self.row(listing, "gone"))
+        self.assertRegex(self.plain(self.row(listing, "unknown")), r"unknown@example\.com\s+-$")
+
+    def test_active_account_prefers_the_live_keychain_login(self):
+        self.save("tokyo", int((time.time() - 60) * 1000))
+        (self.accounts / ".active").write_text("tokyo\n")
+        live = {"claudeAiOauth": {"accessToken": TOKEN, "refreshTokenExpiresAt": RESET * 1000}}
+        self.assertIn("login 03 Jan 11:00", self.plain(self.bash("list_accounts", credentials=live)))
+        # Without a readable live login the backup still answers.
+        self.assertIn("login expired", self.plain(self.bash("list_accounts", credentials={})))
+        self.assertIn("Login:      until 03 Jan 11:00", self.plain(self.bash("show_current", credentials=live)))
+        self.assertIn("Login:      " + RED + "expired", self.bash("show_current", credentials={}))
+
+    def test_no_expiry_anywhere_leaves_the_column_out(self):
+        self.save("tokyo", None)
+        self.assertNotIn("login", self.bash("list_accounts", credentials={}))
+        (self.accounts / ".active").write_text("tokyo\n")
+        self.assertNotIn("Login", self.bash("show_current", credentials={}))
+
+
+YELLOW = "\x1b[1;33m"
+RED = "\x1b[0;31m"
 
 
 if __name__ == "__main__":

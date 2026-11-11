@@ -39,6 +39,10 @@ class AliasTimezoneTests(unittest.TestCase):
         # Surge or encryption. No real account/config directory is read or changed.
         for name in ("ps", "kill", "security", "osascript", "surge-cli", "openssl"):
             self.executable(name, '#!/bin/bash\nprintf "%s\\n" "$0" >> "$FORBIDDEN"\nexit 98\n')
+        # list shows the active login's expiry from the Keychain: a read-only lookup
+        # finds no item there (falling back to the backup); any other use fails closed.
+        self.executable("security", '#!/bin/bash\n[ "$1" = find-generic-password ] && exit 44\n'
+                        'printf "%s\\n" "$0" >> "$FORBIDDEN"\nexit 98\n')
         for shell in ("bash", "zsh"):
             # Account metadata operations must not start a shell to query aliases.
             self.executable(shell, '#!/bin/bash\nprintf "shell probe\\n" >> "$PROBES"\nexit 97\n')

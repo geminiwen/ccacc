@@ -73,6 +73,10 @@ class ShellIntegrationTests(unittest.TestCase):
         for name in ("ps", "kill", "security", "osascript", "surge-cli", "openssl",
                      "curl", "wget", "open", "op"):
             self.executable(name, '#!/bin/bash\nprintf "%s\\n" "$0" >> "$FORBIDDEN"\nexit 98\n')
+        # list shows the active login's expiry from the Keychain: a read-only lookup
+        # finds no item there (falling back to the backup); any other use fails closed.
+        self.executable("security", '#!/bin/bash\n[ "$1" = find-generic-password ] && exit 44\n'
+                        'printf "%s\\n" "$0" >> "$FORBIDDEN"\nexit 98\n')
         self.executable("jq", '#!/bin/bash\nprintf "%s\\0" "$@" >> "$JQ_ARGV_LOG"\nexec '
                         + shlex.quote(JQ) + ' "$@"\n')
         self.executable("claude", r'''#!/bin/bash
